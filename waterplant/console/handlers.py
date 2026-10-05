@@ -12,7 +12,7 @@ from waterplant.intake import DEFAULT_WINDOW, Sensor, validate_flow
 from waterplant.inventory import validate_quantity
 from waterplant.ns import Stage, treatment_line
 from waterplant.ph import validate_ph
-from waterplant.quota import Quota, check_quota, validate_amount
+from waterplant.quota import Quota, check_quota, validate_amount, validate_limit
 from waterplant.reporting import audit_export, telemetry_export, to_csv
 from waterplant.scheduler import validate_threshold
 from waterplant.store import export_state
@@ -252,11 +252,59 @@ def backwash_replay(server: "Server", request: Request) -> Response:
 def quota_add(server: "Server", request: Request) -> Response:
     amount = request.float_field("amount")
     validate_amount(amount)
-    return json_response({"value": server.runtime.accumulator.add(amount)})
+    accumulator = server.runtime.accumulator
+    settled_before = len(accumulator.settlements())
+    accumulator.add(amount)
+    payload = accumulator.state().as_dict()
+    payload["settled"] = [
+        settlement.as_dict() for settlement in accumulator.settlements()[settled_before:]
+    ]
+    return json_response(payload)
 
 
 def quota_get(server: "Server", request: Request) -> Response:
-    return json_response({"value": server.runtime.accumulator.value()})
+    accumulator = server.runtime.accumulator
+    payload = accumulator.state().as_dict()
+    payload["verification"] = accumulator.verify()
+    return json_response(payload)
+
+
+def quota_settle(server: "Server", request: Request) -> Response:
+    cycle_id = request.int_field("cycle_id", 0)
+    settlement = server.runtime.accumulator.settle(cycle_id if cycle_id > 0 else None)
+    return json_response(
+        {
+            "settlement": None if settlement is None else settlement.as_dict(),
+            "state": server.runtime.accumulator.state().as_dict(),
+        }
+    )
+
+
+def quota_recover(server: "Server", request: Request) -> Response:
+    settlement = server.runtime.accumulator.recover()
+    return json_response(
+        {
+            "recovered": None if settlement is None else settlement.as_dict(),
+            "state": server.runtime.accumulator.state().as_dict(),
+        }
+    )
+
+
+def quota_settlements(server: "Server", request: Request) -> Response:
+    settlements = server.runtime.accumulator.settlements()
+    return json_response(
+        {
+            "settlements": [settlement.as_dict() for settlement in settlements],
+            "count": len(settlements),
+            "state": server.runtime.accumulator.state().as_dict(),
+        }
+    )
+
+
+def quota_limit(server: "Server", request: Request) -> Response:
+    limit = request.float_field("limit")
+    validate_limit(limit)
+    return json_response({"limit": server.runtime.accumulator.set_limit(limit)})
 
 
 def quota_check(server: "Server", request: Request) -> Response:

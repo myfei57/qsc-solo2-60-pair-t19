@@ -207,6 +207,64 @@ class ConsoleCase(unittest.TestCase):
         status, body = self.call("POST", "/audit/filter", {"kind": "chlorine"})
         self.assertEqual(len(body["entries"]), 1)
 
+    def test_quota_cycle_settlement_routes(self) -> None:
+        status, body = self.call("POST", "/quota/add", {"amount": 60.0})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["value"], 60.0)
+        self.assertEqual(body["cycle"], 1)
+        self.assertEqual(body["settled"], [])
+
+        # The straddling dose settles cycle 1 at the limit and carries 20.
+        status, body = self.call("POST", "/quota/add", {"amount": 60.0})
+        self.assertEqual(body["value"], 20.0)
+        self.assertEqual(body["cycle"], 2)
+        self.assertEqual(len(body["settled"]), 1)
+        self.assertEqual(body["settled"][0]["settled_total"], 100.0)
+        self.assertEqual(body["settled"][0]["trigger"], "limit")
+
+        status, body = self.call("GET", "/quota/settlements")
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["settlements"][0]["cycle"], 1)
+
+        status, body = self.call("GET", "/quota")
+        self.assertTrue(body["consistent"])
+        self.assertEqual(body["verification"]["total_dosed"], 120.0)
+
+        # Manual settle closes cycle 2 at 20; repeats stay idempotent.
+        status, body = self.call("POST", "/quota/settle", {})
+        self.assertEqual(body["settlement"]["settled_total"], 20.0)
+        self.assertEqual(body["settlement"]["trigger"], "manual")
+        self.assertEqual(body["state"]["cycle"], 3)
+        status, body = self.call("POST", "/quota/settle", {"cycle_id": 2})
+        self.assertEqual(body["settlement"]["settled_total"], 20.0)
+        status, body = self.call("POST", "/quota/settle", {})
+        self.assertIsNone(body["settlement"])
+        status, body = self.call("GET", "/quota/settlements")
+        self.assertEqual(body["count"], 2)
+
+        # Nothing pending: recovery is a no-op.
+        status, body = self.call("POST", "/quota/recover", {})
+        self.assertIsNone(body["recovered"])
+
+        # Settlement results and cycle boundaries are in the audit trail.
+        status, body = self.call("POST", "/audit/filter", {"kind": "quota:settlement"})
+        self.assertEqual(len(body["entries"]), 2)
+        status, body = self.call("POST", "/audit/filter", {"kind": "quota:cycle-open"})
+        self.assertEqual(len(body["entries"]), 2)
+
+        # The cycle limit is configurable from the current cycle onward.
+        status, body = self.call("POST", "/quota/limit", {"limit": 50.0})
+        self.assertEqual(body["limit"], 50.0)
+        status, body = self.call("POST", "/quota/add", {"amount": 60.0})
+        self.assertEqual(body["value"], 10.0)
+        self.assertEqual(body["settled"][0]["settled_total"], 50.0)
+        status, body = self.call("POST", "/quota/limit", {"limit": 0.0})
+        self.assertEqual(status, 400)
+
+        _, checks = self.call("GET", "/health/checks")
+        quota_check = [c for c in checks["checks"] if c["name"] == "quota"][0]
+        self.assertEqual(quota_check["status"], "ok")
+
     def test_cycle_and_simulation(self) -> None:
         self.call("POST", "/filter/add", {"id": "b1", "zone": 1, "load": 3.0})
         status, body = self.call(

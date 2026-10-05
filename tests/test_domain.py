@@ -19,6 +19,15 @@ from waterplant.inventory import Inventory, Lot, validate_quantity
 from waterplant.ns import Stage, treatment_line
 from waterplant.ph import Stabilizer, validate_ph
 from waterplant.quota import Accumulator, Quota, check_quota, validate_amount
+from waterplant.quota.ledger import (
+    PHASE_SETTLING,
+    CycleStatus,
+    DoseSegment,
+    Settlement,
+    append_dose,
+    save_cycle,
+    save_journal,
+)
 from waterplant.reporting import audit_export, to_csv
 from waterplant.scheduler import Scheduler, validate_threshold
 from waterplant.store import (
@@ -331,6 +340,148 @@ class QuotaCase(unittest.TestCase):
         validate_amount(1.0)
         with self.assertRaises(ValueError):
             validate_amount(-1.0)
+
+
+class QuotaCycleCase(unittest.TestCase):
+    def test_cycle_settles_at_limit_and_carries_remainder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.add(40.0)
+            accumulator.add(40.0)
+            self.assertEqual(accumulator.add(50.0), 30.0)
+            self.assertEqual(accumulator.cycle_id(), 2)
+            self.assertEqual(accumulator.value(), 30.0)
+            settlements = accumulator.settlements()
+            self.assertEqual(len(settlements), 1)
+            self.assertEqual(settlements[0].cycle_id, 1)
+            self.assertEqual(settlements[0].settled_total, 100.0)
+            self.assertEqual(settlements[0].trigger, "limit")
+            verification = accumulator.verify()
+            self.assertTrue(verification["consistent"])
+            self.assertEqual(verification["total_dosed"], 130.0)
+            self.assertEqual(verification["settled_total"], 100.0)
+
+    def test_straddling_dose_is_split_at_the_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.add(40.0)
+            accumulator.add(40.0)
+            accumulator.add(50.0)
+            doses = accumulator.doses()
+            self.assertEqual([dose.amount for dose in doses], [40.0, 40.0, 20.0, 30.0])
+            self.assertEqual([dose.cycle_id for dose in doses], [1, 1, 1, 2])
+
+    def test_one_large_dose_settles_several_cycles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.add(30.0)
+            self.assertEqual(accumulator.add(250.0), 80.0)
+            self.assertEqual(accumulator.cycle_id(), 3)
+            totals = [item.settled_total for item in accumulator.settlements()]
+            self.assertEqual(totals, [100.0, 100.0])
+            self.assertTrue(accumulator.verify()["consistent"])
+
+    def test_interrupted_settlement_recovers_from_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.add(60.0)
+            # Simulate a crash after the journal was written but before the
+            # settlement completed.
+            save_journal(
+                store,
+                Settlement(
+                    cycle_id=1,
+                    settled_total=60.0,
+                    limit=100.0,
+                    trigger="limit",
+                    closed_at="2026-01-01T00:00:00Z",
+                ),
+            )
+            save_cycle(store, CycleStatus(1, PHASE_SETTLING, 100.0))
+            recovered = accumulator.recover()
+            self.assertIsNotNone(recovered)
+            self.assertEqual(recovered.settled_total, 60.0)
+            self.assertEqual(accumulator.cycle_id(), 2)
+            self.assertEqual(accumulator.value(), 0.0)
+            # Recovery is idempotent and accepts new accumulation afterwards.
+            self.assertIsNone(accumulator.recover())
+            self.assertEqual(len(accumulator.settlements()), 1)
+            self.assertEqual(accumulator.add(10.0), 10.0)
+            self.assertTrue(accumulator.verify()["consistent"])
+
+    def test_interrupted_settlement_rebuilds_journal_from_doses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.add(60.0)
+            # Simulate a crash after a dose segment was recorded but before
+            # the settlement journal was written.
+            append_dose(store, DoseSegment(cycle_id=1, amount=40.0, at="t"))
+            recovered = accumulator.recover()
+            self.assertIsNotNone(recovered)
+            self.assertEqual(recovered.settled_total, 100.0)
+            self.assertEqual(recovered.trigger, "recovery")
+            self.assertEqual(accumulator.cycle_id(), 2)
+            self.assertEqual(accumulator.value(), 0.0)
+            self.assertTrue(accumulator.verify()["consistent"])
+
+    def test_manual_settle_is_idempotent_per_cycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.add(25.0)
+            settlement = accumulator.settle()
+            self.assertIsNotNone(settlement)
+            self.assertEqual(settlement.settled_total, 25.0)
+            self.assertEqual(settlement.trigger, "manual")
+            self.assertEqual(accumulator.cycle_id(), 2)
+            self.assertEqual(accumulator.value(), 0.0)
+            # Repeating the settle for the same cycle replays the record.
+            replay = accumulator.settle(1)
+            self.assertIsNotNone(replay)
+            self.assertEqual(replay.settled_total, 25.0)
+            self.assertEqual(len(accumulator.settlements()), 1)
+            # Settling an empty open cycle is a no-op, never a phantom entry.
+            self.assertIsNone(accumulator.settle())
+            self.assertEqual(len(accumulator.settlements()), 1)
+            with self.assertRaises(ValueError):
+                accumulator.settle(99)
+            self.assertTrue(accumulator.verify()["consistent"])
+
+    def test_settlement_and_boundary_are_audited_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            auditor = Auditor(store)
+            accumulator = Accumulator(store)
+            accumulator.add(150.0)
+            self.assertEqual(auditor.count_by_kind().get("quota:settlement"), 1)
+            self.assertEqual(auditor.count_by_kind().get("quota:cycle-open"), 1)
+            entries = auditor.filter("quota:settlement")
+            self.assertIn('"cycle": 1', entries[0].detail)
+            # Replaying recovery and settlement adds no further entries.
+            accumulator.recover()
+            accumulator.settle(1)
+            self.assertEqual(auditor.count_by_kind().get("quota:settlement"), 1)
+            self.assertEqual(auditor.count_by_kind().get("quota:cycle-open"), 1)
+            # Settlement details are not numeric doses and stay out of totals.
+            self.assertEqual(auditor.totals(), {})
+
+    def test_cycle_limit_change_applies_from_current_cycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store.open(f"{tmp}/state.json")
+            accumulator = Accumulator(store)
+            accumulator.set_limit(50.0)
+            self.assertEqual(accumulator.add(60.0), 10.0)
+            settlements = accumulator.settlements()
+            self.assertEqual(settlements[0].settled_total, 50.0)
+            self.assertEqual(settlements[0].limit, 50.0)
+            with self.assertRaises(ValueError):
+                accumulator.set_limit(0.0)
+            self.assertTrue(accumulator.verify()["consistent"])
 
 
 class AuditCase(unittest.TestCase):

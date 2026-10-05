@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from waterplant.quota import PHASE_SETTLING
+
 from .runtime import Runtime
 
 
@@ -17,10 +19,17 @@ def run_checks(rt: Runtime) -> list[dict[str, str]]:
         checks.append({"name": "residual", "status": "fail", "detail": "target must be positive"})
     else:
         checks.append({"name": "residual", "status": "ok", "detail": "target set"})
-    if rt.accumulator.value() < 0:
-        checks.append({"name": "quota", "status": "fail", "detail": "accumulator is negative"})
+    quota = rt.accumulator.state()
+    if not quota.consistent:
+        checks.append(
+            {"name": "quota", "status": "fail", "detail": "accumulator does not reconcile"}
+        )
+    elif quota.phase == PHASE_SETTLING:
+        checks.append(
+            {"name": "quota", "status": "warn", "detail": "settlement pending recovery"}
+        )
     else:
-        checks.append({"name": "quota", "status": "ok", "detail": "accumulator set"})
+        checks.append({"name": "quota", "status": "ok", "detail": f"cycle {quota.cycle} open"})
     if rt.flow_repository.load_flow()[1]:
         checks.append({"name": "intake", "status": "ok", "detail": "flow reading present"})
     else:
