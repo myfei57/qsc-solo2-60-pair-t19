@@ -68,6 +68,7 @@ class ConsoleCase(unittest.TestCase):
                 "schedule",
                 "trend",
                 "inventory",
+                "dosing",
             },
         )
 
@@ -197,15 +198,31 @@ class ConsoleCase(unittest.TestCase):
         self.assertEqual(body["remaining"], 60.0)
         self.assertTrue(body["ok"])
 
+        status, body = self.call("POST", "/quota/add", {"amount": 70.0})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["value"], 0.0)
+        self.assertEqual(body["settlement"]["usage"], 110.0)
+        self.assertEqual(body["cycle"]["status"], "open")
+        status, body = self.call("GET", "/dosing/settlements")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["settlements"][0]["usage"], 110.0)
+        self.assertTrue(body["settlements"][0]["next_cycle_id"])
+        status, body = self.call("GET", "/dosing/cycles")
+        self.assertEqual([cycle["status"] for cycle in body["cycles"]], ["settled", "open"])
+        status, body = self.call("GET", "/export/settlements")
+        self.assertEqual(status, 200)
+        self.assertIn("chemical,cycle_id,usage", body)
+        self.assertIn("110.0000", body)
+
         self.call("POST", "/coag/dose", {"flow": 5.0})
         self.call("POST", "/chlor/dose", {})
         status, body = self.call("GET", "/audit")
-        self.assertEqual(len(body["entries"]), 2)
+        self.assertEqual(len(body["entries"]), 4)
         status, body = self.call("GET", "/audit/summary")
-        self.assertEqual(body["count"], 2)
-        self.assertEqual(body["by_kind"], {"coagulant": 1, "chlorine": 1})
+        self.assertEqual(body["count"], 4)
+        self.assertEqual(body["by_kind"], {"coagulant": 1, "chlorine": 3})
         status, body = self.call("POST", "/audit/filter", {"kind": "chlorine"})
-        self.assertEqual(len(body["entries"]), 1)
+        self.assertEqual(len(body["entries"]), 3)
 
     def test_cycle_and_simulation(self) -> None:
         self.call("POST", "/filter/add", {"id": "b1", "zone": 1, "load": 3.0})
@@ -228,7 +245,7 @@ class ConsoleCase(unittest.TestCase):
         self.assertEqual(body["chlor_dose"], 0.65)
         self.assertEqual(body["rotation"], ["b1"])
         self.assertEqual(body["drains"], 1)
-        self.assertEqual(body["audit_count"], 2)
+        self.assertEqual(body["audit_count"], 3)
         self.assertTrue(body["ph_stable"])
         self.assertEqual(body["ph_adjustment"], 0.0)
 
@@ -338,7 +355,7 @@ class ConsoleCase(unittest.TestCase):
         self.call("POST", "/coag/dose", {"flow": 5.0})
         status, body = self.call("GET", "/export/audit")
         self.assertEqual(status, 200)
-        self.assertIn("time,kind,detail,id", body)
+        self.assertIn("time,kind,detail,id,cycle_id", body)
         self.assertIn("coagulant", body)
 
         status, body = self.call("GET", "/export/telemetry")

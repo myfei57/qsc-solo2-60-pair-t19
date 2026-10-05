@@ -1,13 +1,11 @@
-"""Append only audit entries for every chemical dose."""
+"""Append only audit entries backed by the durable dosing ledger."""
 
 from __future__ import annotations
 
-import json
 import time
-import uuid
 from dataclasses import dataclass
 
-from waterplant.store.commands import append_command, load_commands
+from waterplant.dosing import DosingLedger
 from waterplant.store.store import Store
 
 from .report import AuditState
@@ -23,45 +21,32 @@ class Entry:
     time: str
     kind: str
     detail: str
+    cycle_id: str = ""
 
     def as_dict(self) -> dict[str, str]:
-        return {"id": self.id, "time": self.time, "kind": self.kind, "detail": self.detail}
+        payload = {"id": self.id, "time": self.time, "kind": self.kind, "detail": self.detail}
+        if self.cycle_id:
+            payload["cycle_id"] = self.cycle_id
+        return payload
 
 
 class Auditor:
-    """Records and queries dosing entries."""
+    """Records and queries dosing entries through the transactional ledger."""
 
-    def __init__(self, store: Store) -> None:
-        self._store = store
+    def __init__(self, store: Store, clock=None) -> None:
+        self._ledger = DosingLedger(store, clock=clock)
+
+    @property
+    def ledger(self) -> DosingLedger:
+        return self._ledger
 
     def record(self, kind: str, detail: str) -> Entry:
-        entry = Entry(
-            id=uuid.uuid4().hex,
-            time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            kind=kind,
-            detail=detail,
-        )
-        append_command(self._store, AUDIT_KEY, json.dumps(entry.as_dict(), ensure_ascii=False))
-        return entry
+        amount = float(detail)
+        result = self._ledger.record_dose(kind, amount, detail)
+        return self._entry(result.entry)
 
     def entries(self) -> list[Entry]:
-        entries: list[Entry] = []
-        for item in load_commands(self._store, AUDIT_KEY):
-            try:
-                payload = json.loads(item)
-            except ValueError:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            entries.append(
-                Entry(
-                    id=str(payload.get("id", "")),
-                    time=str(payload.get("time", "")),
-                    kind=str(payload.get("kind", "")),
-                    detail=str(payload.get("detail", "")),
-                )
-            )
-        return entries
+        return [self._entry(entry) for entry in self._ledger.doses()]
 
     def last(self) -> Entry | None:
         entries = self.entries()
@@ -92,13 +77,12 @@ class Auditor:
         """Sum the numeric dose recorded for each chemical."""
 
         totals: dict[str, float] = {}
-        for entry in self.entries():
-            try:
-                amount = float(entry.detail)
-            except ValueError:
-                continue
-            totals[entry.kind] = totals.get(entry.kind, 0.0) + amount
+        for entry in self._ledger.doses():
+            totals[entry.chemical] = round(totals.get(entry.chemical, 0.0) + entry.amount, 4)
         return totals
+
+    def settlements(self, kind: str | None = None) -> list[object]:
+        return self._ledger.settlements(kind)
 
     def state(self) -> AuditState:
         entries = self.entries()
@@ -106,3 +90,12 @@ class Auditor:
 
     def describe(self) -> str:
         return f"audit entries={len(self.entries())}"
+
+    def _entry(self, dose) -> Entry:
+        return Entry(
+            id=dose.id,
+            time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(dose.recorded_at)),
+            kind=dose.chemical,
+            detail=dose.detail,
+            cycle_id=dose.cycle_id,
+        )

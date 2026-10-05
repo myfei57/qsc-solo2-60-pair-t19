@@ -5,6 +5,7 @@ from __future__ import annotations
 from waterplant.clearwell import Well
 from waterplant.flow import Calibration
 from waterplant.intake import DEFAULT_WINDOW, WINDOW_KEY, FlowRepository, Trend
+from waterplant.dosing import DosingLedger
 from waterplant.ph import DEFAULT_PH, PH_KEY, Stabilizer
 from waterplant.quota import Accumulator
 from waterplant.scheduler import DEFAULT_THRESHOLD, THRESHOLD_KEY, Scheduler
@@ -29,6 +30,9 @@ def seed_defaults(store: Store) -> None:
         repository.persist_flow(1.0)
 
     accumulator = Accumulator(store)
+    pending = DosingLedger(store).state().pending
+    if pending is not None:
+        DosingLedger(store).recover(str(pending.get("chemical", "chlorine")))
     if accumulator.value() < 0:
         accumulator.reset()
 

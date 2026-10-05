@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections.abc import Callable
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
 class Store:
@@ -53,6 +57,14 @@ class Store:
         with self._lock:
             self._data[key] = value
             self._save_locked()
+
+    def mutate(self, callback: Callable[[dict[str, str]], T]) -> T:
+        """Change multiple keys atomically and persist them as one document."""
+
+        with self._lock:
+            result = callback(self._data)
+            self._save_locked()
+            return result
 
     def delete(self, key: str) -> None:
         with self._lock:

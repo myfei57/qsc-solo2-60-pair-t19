@@ -23,6 +23,7 @@ def collect(rt: Runtime) -> dict[str, object]:
         "flow": rt.calibration.state().as_dict(),
         "clearwell": rt.well.state().as_dict(),
         "quota": rt.accumulator.state().as_dict(),
+        "dosing": rt.auditor.ledger.state().as_dict(),
         "audit": rt.auditor.state().as_dict(),
         "ph": rt.stabilizer.state().as_dict(),
         "schedule": rt.scheduler.state(rt.bank).as_dict(),

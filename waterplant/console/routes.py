@@ -65,7 +65,15 @@ def route_table() -> list[Route]:
         Route("POST", "/backwash/replay", "replay queued backwash commands", "backwash_replay"),
         Route("POST", "/quota/add", "accumulate chlorine consumption", "quota_add"),
         Route("GET", "/quota", "read the chlorine accumulator", "quota_get"),
+        Route("POST", "/quota/settle", "settle the chlorine usage cycle", "quota_settle"),
         Route("POST", "/quota/check", "check chemical quota usage", "quota_check"),
+        Route("GET", "/dosing", "dosing ledger, cycles and settlements", "dosing_state"),
+        Route("GET", "/dosing/policy", "read a chemical cycle policy", "dosing_policy_get"),
+        Route("POST", "/dosing/policy", "set a chemical cycle policy", "dosing_policy_set"),
+        Route("POST", "/dosing/recover", "recover an interrupted settlement", "dosing_recover"),
+        Route("POST", "/dosing/settle", "settle a chemical usage cycle", "dosing_settle"),
+        Route("GET", "/dosing/cycles", "list chemical usage cycles", "dosing_cycles"),
+        Route("GET", "/dosing/settlements", "list audited settlement results", "dosing_settlements"),
         Route("GET", "/audit", "list chemical dosing audit entries", "audit_list"),
         Route("GET", "/audit/summary", "audit entry count by kind", "audit_summary"),
         Route("POST", "/audit/filter", "filter audit entries by kind", "audit_filter"),
@@ -88,6 +96,7 @@ def route_table() -> list[Route]:
         Route("GET", "/metrics", "console request counters", "metrics"),
         Route("POST", "/metrics/reset", "reset console request counters", "metrics_reset"),
         Route("GET", "/export/audit", "dosing audit trail as CSV", "export_audit"),
+        Route("GET", "/export/settlements", "cycle settlement audit as CSV", "export_settlements"),
         Route("GET", "/export/telemetry", "telemetry counters as CSV", "export_telemetry"),
     ]
 

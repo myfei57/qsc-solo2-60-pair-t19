@@ -7,12 +7,14 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AccumState:
-    """Current accumulator value."""
+    """Current accumulator value and its audited cycle boundary."""
 
     value: float
+    cycle: dict[str, object] | None
+    pending: dict[str, object] | None
 
-    def as_dict(self) -> dict[str, float]:
-        return {"value": self.value}
+    def as_dict(self) -> dict[str, object]:
+        return {"value": self.value, "cycle": self.cycle, "pending": self.pending}
 
 
 def validate_amount(amount: float) -> None:

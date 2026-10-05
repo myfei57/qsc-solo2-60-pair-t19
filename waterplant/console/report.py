@@ -30,6 +30,12 @@ def text_report(rt: Runtime) -> str:
         f"clearwell: {describe['clearwell']}",
         f"quota: {describe['quota']}",
         f"audit: {describe['audit']}",
+        (
+            "dosing cycles="
+            f"{len(rt.auditor.ledger.state().cycles)} "
+            f"settlements={len(rt.auditor.ledger.settlements())} "
+            f"pending={rt.auditor.ledger.state().pending is not None}"
+        ),
         f"audit kinds={rt.auditor.kinds()}",
         (
             f"filter beds={telemetry.filter_beds} active={telemetry.filter_active} "

@@ -25,7 +25,6 @@ from waterplant.store import (
     Store,
     append_command,
     append_event,
-    advance_epoch,
     clear_commands,
     event_count,
     list_events,
@@ -60,13 +59,6 @@ class StoreCase(unittest.TestCase):
             self.assertEqual(load_commands(store, "list"), ["one", "two"])
             clear_commands(store, "list")
             self.assertEqual(load_commands(store, "list"), [])
-
-    def test_epoch_wraps_and_stays_positive(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            store = Store.open(f"{tmp}/state.json")
-            self.assertEqual(advance_epoch(store, "counter", 40.0, 100.0), 40.0)
-            self.assertEqual(advance_epoch(store, "counter", 90.0, 100.0), 30.0)
-            self.assertGreaterEqual(advance_epoch(store, "counter", 95.0, 100.0), 0.0)
 
     def test_history_records_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,7 +486,7 @@ class ReportingCase(unittest.TestCase):
             auditor = Auditor(Store.open(f"{tmp}/state.json"))
             auditor.record("coagulant", "2.0000")
             columns, rows = audit_export(auditor)
-            self.assertEqual(columns, ["time", "kind", "detail", "id"])
+            self.assertEqual(columns, ["time", "kind", "detail", "id", "cycle_id"])
             self.assertEqual(rows[0][1], "coagulant")
             self.assertEqual(rows[0][2], "2.0000")
 

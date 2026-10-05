@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover - imported only for type checkers
     from waterplant.audit import Auditor
     from waterplant.console.telemetry import Telemetry
+    from waterplant.dosing import DosingLedger
 
 QUOTE_TRIGGERS = (",", '"', "\n")
 
@@ -31,8 +32,46 @@ def to_csv(columns: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
 def audit_export(auditor: Auditor) -> tuple[list[str], list[list[str]]]:
     """Columns and rows for the dosing audit trail."""
 
-    columns = ["time", "kind", "detail", "id"]
-    rows = [[entry.time, entry.kind, entry.detail, entry.id] for entry in auditor.entries()]
+    columns = ["time", "kind", "detail", "id", "cycle_id"]
+    rows = [
+        [entry.time, entry.kind, entry.detail, entry.id, entry.cycle_id]
+        for entry in auditor.entries()
+    ]
+    return columns, rows
+
+
+def settlement_export(ledger: DosingLedger) -> tuple[list[str], list[list[object]]]:
+    """Columns and rows for audited cycle boundaries and usage results."""
+
+    columns = [
+        "chemical",
+        "cycle_id",
+        "usage",
+        "entry_count",
+        "boundary_time",
+        "started_at",
+        "finished_at",
+        "triggered_by",
+        "status",
+        "next_cycle_id",
+        "id",
+    ]
+    rows = [
+        [
+            item.chemical,
+            item.cycle_id,
+            f"{item.usage:.4f}",
+            item.entry_count,
+            item.boundary_time,
+            item.started_at,
+            item.finished_at,
+            item.triggered_by,
+            item.status,
+            item.next_cycle_id,
+            item.id,
+        ]
+        for item in ledger.settlements()
+    ]
     return columns, rows
 
 

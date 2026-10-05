@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Iterable
 
+from waterplant.dosing import SettlementInProgress
 from waterplant.store import Store
 
 from . import handlers
@@ -39,6 +40,8 @@ class Server:
             return handler(self, request)
         except RequestError as exc:
             return error_response(exc.status, exc.message)
+        except SettlementInProgress as exc:
+            return error_response(409, str(exc))
         except ValueError as exc:
             return error_response(400, str(exc))
         except Exception as exc:  # noqa: BLE001 - last resort for a live console

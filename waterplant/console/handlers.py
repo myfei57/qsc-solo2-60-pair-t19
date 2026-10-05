@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from waterplant.chlor import validate_demand
 from waterplant.clearwell import validate_level
+from waterplant.dosing import OPEN, QUANTITY, TIME, CyclePolicy
 from waterplant.filter import validate_zone
 from waterplant.flow import calibrate_meter, validate_factor
 from waterplant.intake import DEFAULT_WINDOW, Sensor, validate_flow
@@ -13,7 +14,7 @@ from waterplant.inventory import validate_quantity
 from waterplant.ns import Stage, treatment_line
 from waterplant.ph import validate_ph
 from waterplant.quota import Quota, check_quota, validate_amount
-from waterplant.reporting import audit_export, telemetry_export, to_csv
+from waterplant.reporting import audit_export, settlement_export, telemetry_export, to_csv
 from waterplant.scheduler import validate_threshold
 from waterplant.store import export_state
 
@@ -252,11 +253,102 @@ def backwash_replay(server: "Server", request: Request) -> Response:
 def quota_add(server: "Server", request: Request) -> Response:
     amount = request.float_field("amount")
     validate_amount(amount)
-    return json_response({"value": server.runtime.accumulator.add(amount)})
+    result = server.runtime.accumulator.ledger.record_dose("chlorine", amount)
+    payload = {
+        "value": float(result.cycle.get("usage", 0.0)),
+        "cycle": result.cycle,
+        "settlement": None if result.settlement is None else result.settlement.as_dict(),
+    }
+    return json_response(payload)
 
 
 def quota_get(server: "Server", request: Request) -> Response:
-    return json_response({"value": server.runtime.accumulator.value()})
+    accumulator = server.runtime.accumulator
+    return json_response(
+        {
+            "value": accumulator.value(),
+            "cycle": accumulator.ledger.current_cycle("chlorine"),
+            "pending": accumulator.ledger.state().pending,
+        }
+    )
+
+
+def quota_settle(server: "Server", request: Request) -> Response:
+    settlement = server.runtime.accumulator.ledger.settle("chlorine")
+    return json_response(
+        {
+            "settled": settlement is not None,
+            "settlement": None if settlement is None else settlement.as_dict(),
+            "cycle": server.runtime.accumulator.ledger.current_cycle("chlorine"),
+        }
+    )
+
+
+def dosing_policy_get(server: "Server", request: Request) -> Response:
+    chemical = request.str_field("chemical", "chlorine")
+    return json_response(server.runtime.auditor.ledger.policy(chemical).as_dict())
+
+
+def dosing_policy_set(server: "Server", request: Request) -> Response:
+    chemical = request.str_field("chemical", "chlorine")
+    mode = request.str_field("mode", QUANTITY)
+    cap = request.float_field("cap", 100.0)
+    duration = request.int_field("duration_seconds", 0)
+    if mode not in {QUANTITY, TIME, OPEN}:
+        raise ValueError("mode must be quantity, time or open")
+    policy = CyclePolicy(
+        chemical=chemical,
+        mode=mode,
+        cap=cap if mode == QUANTITY else 0.0,
+        duration_seconds=duration if mode == TIME else 0,
+    )
+    return json_response(server.runtime.auditor.ledger.set_policy(policy).as_dict())
+
+
+def dosing_recover(server: "Server", request: Request) -> Response:
+    chemical = request.str_field("chemical", "chlorine")
+    settlement = server.runtime.auditor.ledger.recover(chemical)
+    return json_response(
+        {
+            "recovered": settlement is not None,
+            "settlement": None if settlement is None else settlement.as_dict(),
+            "cycle": server.runtime.auditor.ledger.current_cycle(chemical),
+        }
+    )
+
+
+def dosing_state(server: "Server", request: Request) -> Response:
+    return json_response(server.runtime.auditor.ledger.state().as_dict())
+
+
+def dosing_cycles(server: "Server", request: Request) -> Response:
+    state = server.runtime.auditor.ledger.state()
+    chemical = request.str_field("chemical")
+    cycles = list(state.cycles.values())
+    if chemical:
+        cycles = [cycle for cycle in cycles if cycle.get("chemical") == chemical]
+    return json_response({"cycles": cycles, "pending": state.pending})
+
+
+def dosing_settlements(server: "Server", request: Request) -> Response:
+    chemical = request.str_field("chemical") or None
+    settlements = server.runtime.auditor.ledger.settlements(chemical)
+    return json_response({"settlements": [item.as_dict() for item in settlements]})
+
+
+def dosing_settle(server: "Server", request: Request) -> Response:
+    chemical = request.str_field("chemical", "chlorine")
+    cycle_id = request.str_field("cycle_id") or None
+    settlement = server.runtime.auditor.ledger.settle(
+        chemical, force=True, cycle_id=cycle_id
+    )
+    return json_response(
+        {
+            "settled": settlement is not None,
+            "settlement": None if settlement is None else settlement.as_dict(),
+            "cycle": server.runtime.auditor.ledger.current_cycle(chemical),
+        }
+    )
 
 
 def quota_check(server: "Server", request: Request) -> Response:
@@ -379,6 +471,11 @@ def metrics_reset(server: "Server", request: Request) -> Response:
 
 def export_audit(server: "Server", request: Request) -> Response:
     columns, rows = audit_export(server.runtime.auditor)
+    return csv_response(to_csv(columns, rows))
+
+
+def export_settlements(server: "Server", request: Request) -> Response:
+    columns, rows = settlement_export(server.runtime.auditor.ledger)
     return csv_response(to_csv(columns, rows))
 
 

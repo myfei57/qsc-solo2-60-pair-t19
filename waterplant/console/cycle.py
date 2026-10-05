@@ -41,7 +41,9 @@ def run_cycle(rt: Runtime, request: Request) -> Response:
     duty = rt.bank.on_duty()
     if bed_id:
         rt.backwash.start(bed_id)
-    quota_value = rt.accumulator.add(amount)
+    rt.accumulator.add(amount)
+    chlorine_cycle = rt.accumulator.ledger.current_cycle("chlorine")
+    quota_value = 0.0 if chlorine_cycle is None else float(chlorine_cycle.get("usage", 0.0))
 
     return json_response(
         {
@@ -51,6 +53,10 @@ def run_cycle(rt: Runtime, request: Request) -> Response:
             "min_level": min_level,
             "level": rt.well.level(),
             "quota": quota_value,
+            "quota_cycle": chlorine_cycle,
+            "settlements": [
+                item.as_dict() for item in rt.auditor.ledger.settlements("chlorine")
+            ],
             "rotation": rotation,
             "on_duty": duty or "",
             "backwash": bed_id,

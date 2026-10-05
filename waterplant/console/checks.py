@@ -19,6 +19,8 @@ def run_checks(rt: Runtime) -> list[dict[str, str]]:
         checks.append({"name": "residual", "status": "ok", "detail": "target set"})
     if rt.accumulator.value() < 0:
         checks.append({"name": "quota", "status": "fail", "detail": "accumulator is negative"})
+    elif rt.auditor.ledger.state().pending is not None:
+        checks.append({"name": "quota", "status": "warn", "detail": "cycle settlement needs recovery"})
     else:
         checks.append({"name": "quota", "status": "ok", "detail": "accumulator set"})
     if rt.flow_repository.load_flow()[1]:
